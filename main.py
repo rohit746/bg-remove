@@ -15,6 +15,8 @@ import sys
 import os
 from pathlib import Path
 import numpy as np
+import subprocess
+import io
 
 
 def invert_dark_colors(image, threshold=128, brightness_boost=1.2):
@@ -68,6 +70,7 @@ def remove_background(
     dark_mode=False,
     invert_threshold=128,
     brightness_boost=1.2,
+    jit=False,
 ):
     """
     Removes the background from an image using the Inspyrenet model.
@@ -79,13 +82,14 @@ def remove_background(
         dark_mode (bool): If True, inverts dark colors for better visibility in dark mode.
         invert_threshold (int): Brightness threshold for dark color inversion (0-255).
         brightness_boost (float): Brightness multiplier for inverted colors.
+        jit (bool): If True, enables TorchScript optimization for faster inference.
 
     Returns:
         bool: True if successful, False otherwise.
     """
     try:
         # Initialize the remover model
-        remover = Remover(mode=model_name)
+        remover = Remover(mode=model_name, jit=jit)
 
         # Open the input image
         input_image = Image.open(input_path)
@@ -116,7 +120,7 @@ def remove_background(
         return False
 
 
-def generate_output_path(input_path, output_path=None, suffix="_nobg"):
+def generate_output_path(input_path, output_path=None, suffix="_nobg", output_dir=None):
     """
     Generates an output path based on the input path if not provided.
 
@@ -124,6 +128,7 @@ def generate_output_path(input_path, output_path=None, suffix="_nobg"):
         input_path (str): Input file path.
         output_path (str): Optional output path.
         suffix (str): Suffix to add to the filename.
+        output_dir (str): Optional output directory.
 
     Returns:
         str: The output path with .png extension.
@@ -133,7 +138,94 @@ def generate_output_path(input_path, output_path=None, suffix="_nobg"):
 
     input_pathobj = Path(input_path)
     output_name = f"{input_pathobj.stem}{suffix}.png"
+
+    if output_dir:
+        output_dir_path = Path(output_dir)
+        output_dir_path.mkdir(parents=True, exist_ok=True)
+        return str(output_dir_path / output_name)
+
     return str(input_pathobj.parent / output_name)
+
+
+def copy_to_clipboard(image_path):
+    """
+    Copies an image to the system clipboard (cross-platform).
+
+    Args:
+        image_path (str): Path to the image file.
+
+    Returns:
+        bool: True if successful, False otherwise.
+    """
+    import platform
+
+    system = platform.system()
+
+    try:
+        if system == "Darwin":  # macOS
+            # Use osascript to copy image to clipboard on macOS
+            subprocess.run(
+                [
+                    "osascript",
+                    "-e",
+                    f'set the clipboard to (read (POSIX file "{image_path}") as «class PNGf»)',
+                ],
+                check=True,
+                capture_output=True,
+            )
+            return True
+
+        elif system == "Windows":
+            # Use PowerShell to copy image to clipboard on Windows
+            powershell_script = f"""
+            Add-Type -AssemblyName System.Windows.Forms
+            $img = [System.Drawing.Image]::FromFile("{image_path}")
+            [System.Windows.Forms.Clipboard]::SetImage($img)
+            $img.Dispose()
+            """
+            subprocess.run(
+                ["powershell", "-Command", powershell_script],
+                check=True,
+                capture_output=True,
+            )
+            return True
+
+        elif system == "Linux":
+            # Try xclip for Linux
+            try:
+                subprocess.run(
+                    [
+                        "xclip",
+                        "-selection",
+                        "clipboard",
+                        "-t",
+                        "image/png",
+                        "-i",
+                        image_path,
+                    ],
+                    check=True,
+                    capture_output=True,
+                )
+                return True
+            except FileNotFoundError:
+                # xclip not installed, provide helpful error
+                print(
+                    "  Note: xclip is required for clipboard support on Linux",
+                    file=sys.stderr,
+                )
+                print(
+                    "  Install with: sudo apt-get install xclip (Debian/Ubuntu)",
+                    file=sys.stderr,
+                )
+                return False
+        else:
+            # Unsupported platform
+            return False
+
+    except subprocess.CalledProcessError:
+        return False
+    except Exception:
+        return False
 
 
 def main():
@@ -160,15 +252,32 @@ Examples:
     )
 
     parser.add_argument(
+        "--output-dir",
+        help="Output directory for processed images. Creates directory if it doesn't exist.",
+    )
+
+    parser.add_argument(
         "--suffix",
         default="_nobg",
         help="Suffix to add to output filename when processing multiple files (default: _nobg)",
     )
 
     parser.add_argument(
+        "--clipboard",
+        action="store_true",
+        help="Copy the final image to clipboard (works with single file)",
+    )
+
+    parser.add_argument(
         "--fast",
         action="store_true",
         help="Use fast model instead of base model (faster but less accurate)",
+    )
+
+    parser.add_argument(
+        "--jit",
+        action="store_true",
+        help="Enable TorchScript optimization for faster inference",
     )
 
     parser.add_argument(
@@ -205,6 +314,12 @@ Examples:
     if args.output and len(args.input) > 1:
         parser.error("--output can only be used with a single input file")
 
+    if args.output and args.output_dir:
+        parser.error("--output and --output-dir cannot be used together")
+
+    if args.clipboard and len(args.input) > 1:
+        parser.error("--clipboard can only be used with a single input file")
+
     # Determine model
     model_name = "fast" if args.fast else "base"
 
@@ -219,7 +334,9 @@ Examples:
             continue
 
         # Generate output path
-        output_file = generate_output_path(input_file, args.output, args.suffix)
+        output_file = generate_output_path(
+            input_file, args.output, args.suffix, args.output_dir
+        )
 
         if not args.quiet:
             print(f"Processing: {input_file} -> {output_file}")
@@ -232,10 +349,20 @@ Examples:
             args.dark_mode,
             args.invert_threshold,
             args.brightness_boost,
+            args.jit,
         ):
             success_count += 1
             if not args.quiet:
                 print(f"✓ Successfully processed: {input_file}")
+
+            # Copy to clipboard if requested
+            if args.clipboard:
+                if copy_to_clipboard(output_file):
+                    if not args.quiet:
+                        print("✓ Copied to clipboard")
+                else:
+                    if not args.quiet:
+                        print("⚠ Failed to copy to clipboard")
         else:
             if not args.quiet:
                 print(f"✗ Failed to process: {input_file}")

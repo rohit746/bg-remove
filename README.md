@@ -30,6 +30,33 @@ python main.py input.jpg
 python main.py input.jpg -o output.png
 ```
 
+### Output to a specific directory
+
+```bash
+# Save to a specific directory
+python main.py input.jpg --output-dir ./processed
+
+# Process multiple files to a directory
+python main.py *.jpg --output-dir ./output
+```
+
+### Copy to clipboard
+
+```bash
+# Process and copy result to clipboard (works on macOS, Windows, Linux)
+python main.py input.jpg --clipboard
+
+# Combine with output directory
+python main.py input.jpg --output-dir ./processed --clipboard
+```
+
+**Note**: On Linux, requires `xclip` to be installed:
+
+```bash
+sudo apt-get install xclip  # Debian/Ubuntu
+sudo dnf install xclip      # Fedora
+```
+
 ### Process multiple files
 
 ```bash
@@ -68,6 +95,9 @@ python main.py --help
 - ✅ Multiple image format support (JPG, PNG, etc.)
 - ✅ Transparent PNG output
 - ✅ Progress feedback
+- ✅ Dark mode optimization (inverts dark colors for Obsidian, etc.)
+- ✅ Output directory support
+- ✅ Clipboard integration (macOS, Windows, Linux)
 
 ## Requirements
 
